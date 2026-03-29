@@ -47,7 +47,7 @@ Clarence's memory system is designed around a single principle: **everything in 
 3. For each unprocessed session file:
    - Extracts user/assistant message pairs (skips tool calls, system messages)
    - Groups pairs into batches of 40
-   - Sends each batch to Gemini Flash via cc-forge
+   - Sends each batch to a local LLM via an OpenAI-compatible endpoint
    - LLM returns structured JSON: `[{type, name, description, body, tags}]`
    - Records are written to `memories` table with `author_agent = 'conversation-distill'`
 4. Deduplication: exact-match on `name` field; updates body if content changed

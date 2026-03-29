@@ -10,9 +10,10 @@ import sqlite_vec
 import struct
 import json
 import sys
+import os
 from datetime import datetime
 
-DB_PATH = "/home/james/.openclaw/workspace/memory/clarence.db"
+DB_PATH = os.environ.get("CLARENCE_DB", "./clarence.db")
 MODEL_NAME = "all-MiniLM-L6-v2"
 DIMS = 384
 

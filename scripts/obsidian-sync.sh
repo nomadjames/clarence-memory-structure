@@ -2,8 +2,8 @@
 # vault-sync.sh — Sync Obsidian vault to Google Drive
 # Runs via cron every 2 hours
 
-VAULT_DIR="/home/james/.openclaw/workspace"
-REMOTE="gdrive:openclaw-workspace"
+VAULT_DIR="${VAULT_DIR:-$HOME/.openclaw/workspace}"
+REMOTE="${RCLONE_REMOTE:-gdrive:openclaw-workspace}"
 LOG="/tmp/vault-sync.log"
 
 echo "$(date): Starting vault sync to $REMOTE" >> "$LOG"
@@ -19,4 +19,4 @@ rclone sync "$VAULT_DIR" "$REMOTE" \
 echo "$(date): Vault sync complete" >> "$LOG"
 
 # Also run the indexer
-/home/james/.openclaw/workspace/scripts/vault-index.sh
+"$(dirname "$0")/vault-index.sh"

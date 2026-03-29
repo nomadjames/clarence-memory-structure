@@ -28,7 +28,7 @@ Semantic Retrieval (agents query relevant context at session start)
 
 Raw session transcripts (OpenClaw JSONL) are processed nightly by `scripts/conversation-distill.py`. The script:
 - Extracts user/assistant message pairs
-- Sends batches to a local LLM (Gemini Flash or MiniMax via cc-forge)
+- Sends batches to a local LLM via an OpenAI-compatible API endpoint
 - The LLM identifies durable knowledge: decisions, corrections, preferences, project updates, personal context
 - Writes structured records to the `memories` table
 

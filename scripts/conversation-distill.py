@@ -215,10 +215,9 @@ def distill_with_model(prompt):
     """Send the distill prompt to a model and parse the result."""
     import subprocess
 
-    # Try cc-forge first, fall back to Ollama
+    # Send to an OpenAI-compatible LLM endpoint
     endpoints = [
-        ("http://127.0.0.1:8321/v1/chat/completions", "cc-forge", "gemini-2.0-flash", 4096),
-        ("http://127.0.0.1:11434/v1/chat/completions", "OLLAMA_API_KEY", "minimax-m2.7:cloud", 4096),
+        (os.environ.get("LLM_API_URL", "http://127.0.0.1:11434/v1/chat/completions"), os.environ.get("LLM_API_KEY", ""), os.environ.get("LLM_MODEL", "minimax-m2.7:cloud"), 4096),
     ]
 
     for url, key, model, max_tokens in endpoints:

@@ -9,9 +9,10 @@ import sqlite3
 import sqlite_vec
 import struct
 import sys
+import os
 import json
 
-DB_PATH = "/home/james/.openclaw/workspace/memory/clarence.db"
+DB_PATH = os.environ.get("CLARENCE_DB", "./clarence.db")
 MODEL_NAME = "all-MiniLM-L6-v2"
 TOP_K = 5
 
