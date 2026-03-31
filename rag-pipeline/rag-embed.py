@@ -48,6 +48,20 @@ def setup_vec_tables(conn):
     """)
     conn.commit()
 
+def cleanup_orphans(conn):
+    """Remove embeddings for memories/facts that are no longer active."""
+    deleted_mems = conn.execute("""
+        DELETE FROM vec_memories
+        WHERE memory_id NOT IN (SELECT id FROM memories WHERE status = 'active')
+    """).rowcount
+    deleted_facts = conn.execute("""
+        DELETE FROM vec_facts
+        WHERE fact_id NOT IN (SELECT id FROM facts WHERE status = 'active')
+    """).rowcount
+    conn.commit()
+    if deleted_mems or deleted_facts:
+        print(f"Cleaned up {deleted_mems} orphaned memory vectors, {deleted_facts} orphaned fact vectors.")
+
 def get_last_embed_run(conn):
     """Get the timestamp of the last embedding run."""
     row = conn.execute("SELECT value FROM rag_meta WHERE key = 'last_embed_run'").fetchone()
@@ -152,6 +166,7 @@ def main():
     conn.enable_load_extension(False)
 
     setup_vec_tables(conn)
+    cleanup_orphans(conn)
 
     print("Loading embedding model...")
     model = get_embedding_model()
