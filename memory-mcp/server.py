@@ -9,11 +9,38 @@ import sys
 import os
 from datetime import datetime
 
+import struct
+
 DB_PATH = os.path.expanduser("~/.openclaw/workspace/memory/clarence.db")
+MODEL_NAME = "BAAI/bge-base-en-v1.5"
+
+# Lazy-loaded at first semantic search call
+_embedding_model = None
+
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embedding_model = SentenceTransformer(MODEL_NAME)
+    return _embedding_model
+
+def _serialize(vector):
+    return struct.pack(f"{len(vector)}f", *vector)
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def get_vec_conn():
+    """Get a connection with sqlite-vec loaded for vector queries."""
+    import sqlite_vec
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -242,6 +269,52 @@ def memory_invalidate(name: str, reason: str = None, author_agent: str = "claren
     conn.close()
     return {"status": "invalidated", "name": name, "reason": reason}
 
+def memory_semantic_search(query: str, top_k: int = 5):
+    """Semantic search across memories and facts using vector similarity."""
+    model = _get_embedding_model()
+    q_vec = model.encode([query])[0]
+    q_bytes = _serialize(q_vec.tolist())
+
+    conn = get_vec_conn()
+
+    memory_results = conn.execute("""
+        SELECT m.name, m.type, m.description, m.body, vm.distance
+        FROM vec_memories vm
+        JOIN memories m ON m.id = vm.memory_id
+        WHERE vm.embedding MATCH ?
+          AND m.status = 'active'
+          AND k = ?
+        ORDER BY vm.distance
+    """, (q_bytes, top_k)).fetchall()
+
+    fact_results = conn.execute("""
+        SELECT e.name AS entity, f.key, f.value, vf.distance
+        FROM vec_facts vf
+        JOIN facts f ON f.id = vf.fact_id
+        JOIN entities e ON f.entity_id = e.id
+        WHERE vf.embedding MATCH ?
+          AND f.status = 'active'
+          AND k = ?
+        ORDER BY vf.distance
+    """, (q_bytes, top_k)).fetchall()
+
+    conn.close()
+
+    results = []
+    for r in memory_results:
+        results.append({
+            "type": "memory", "name": r["name"], "memory_type": r["type"],
+            "description": r["description"], "body": r["body"][:500],
+            "distance": r["distance"]
+        })
+    for r in fact_results:
+        results.append({
+            "type": "fact", "entity": r["entity"], "key": r["key"],
+            "value": r["value"][:500], "distance": r["distance"]
+        })
+    results.sort(key=lambda x: x["distance"])
+    return results[:top_k * 2]
+
 # ── Tool Registry ─────────────────────────────────────────────────────────────
 
 TOOLS = {
@@ -401,6 +474,17 @@ TOOLS = {
             },
             "required": ["name"]
         }
+    },
+    "memory_semantic_search": {
+        "description": "Semantic search across memories and facts using vector similarity. Use this when you don't know exact keywords but know what concept you're looking for.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Natural language query"},
+                "top_k": {"type": "integer", "description": "Number of results (default 5)"}
+            },
+            "required": ["query"]
+        }
     }
 }
 
@@ -418,6 +502,7 @@ DISPATCH = {
     "profile_get": lambda a: profile_get(**a),
     "profile_set": lambda a: profile_set(**a),
     "memory_invalidate": lambda a: memory_invalidate(**a),
+    "memory_semantic_search": lambda a: memory_semantic_search(**a),
 }
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────

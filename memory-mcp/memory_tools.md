@@ -165,6 +165,21 @@ Create or update a profile entry.
 
 ---
 
+### `memory_semantic_search`
+Vector similarity search across memories and facts. Uses the same embedding model (`BAAI/bge-base-en-v1.5`) as the nightly pipeline.
+
+**Parameters:**
+- `query` (required) — natural language query (e.g., "how does sensor data map to FM parameters?")
+- `top_k` (optional) — number of results per table, default 5 (returns up to 2x top_k merged results)
+
+**Returns:** Array of `{type, name/entity, description/key, body/value, distance}` sorted by distance (lower = more similar).
+
+**Use when:** You know what concept you're looking for but not the exact keywords. Falls back gracefully if vec tables are empty.
+
+**Model loading:** The embedding model is loaded lazily on first call (~2s cold start, ~150ms per query after).
+
+---
+
 ## Memory Types
 
 | Type | Purpose | Examples |
