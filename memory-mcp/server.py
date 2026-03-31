@@ -174,13 +174,21 @@ def entity_upsert(name: str, type: str, description: str = None, facts: dict = N
     if facts:
         for key, value in facts.items():
             existing = conn.execute(
-                "SELECT id FROM facts WHERE entity_id=? AND key=?", (entity_id, key)
+                "SELECT id, value FROM facts WHERE entity_id=? AND key=? AND status='active'",
+                (entity_id, key)
             ).fetchone()
             if existing:
-                conn.execute(
-                    "UPDATE facts SET value=?, updated_at=unixepoch() WHERE id=?",
-                    (str(value), existing["id"])
-                )
+                if str(value) != existing["value"]:
+                    # Supersede: mark old fact invalid, insert new with pointer
+                    conn.execute(
+                        "UPDATE facts SET status='invalid', updated_at=unixepoch() WHERE id=?",
+                        (existing["id"],)
+                    )
+                    conn.execute(
+                        "INSERT INTO facts (entity_id, key, value, supersedes) VALUES (?,?,?,?)",
+                        (entity_id, key, str(value), existing["id"])
+                    )
+                # If value unchanged, skip (no-op update)
             else:
                 conn.execute(
                     "INSERT INTO facts (entity_id, key, value) VALUES (?,?,?)",
@@ -197,7 +205,7 @@ def entity_get(name: str):
     if not entity:
         return {"error": f"Entity '{name}' not found"}
     facts = conn.execute(
-        "SELECT key, value, source, confidence FROM facts WHERE entity_id=?",
+        "SELECT key, value, source, confidence FROM facts WHERE entity_id=? AND status='active'",
         (entity["id"],)
     ).fetchall()
     conn.close()
