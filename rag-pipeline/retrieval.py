@@ -13,7 +13,7 @@ import os
 import json
 
 DB_PATH = os.environ.get("CLARENCE_DB", "./clarence.db")
-MODEL_NAME = "all-MiniLM-L6-v2"
+MODEL_NAME = "BAAI/bge-base-en-v1.5"
 TOP_K = 5
 
 def serialize(vector):

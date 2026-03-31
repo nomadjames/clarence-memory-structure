@@ -59,7 +59,7 @@ Clarence's memory system is designed around a single principle: **everything in 
 3. Builds text representations:
    - Memories: `"{name}: {description}\n{body}"`
    - Facts: `"{entity_name} — {key}: {value}"`
-4. Embeds via `sentence-transformers` (`all-MiniLM-L6-v2`, 384 dims)
+4. Embeds via `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims)
 5. Stores in `vec_memories` and `vec_facts` (sqlite-vec virtual tables)
 
 ### Path 3: Agent Query → Semantic Retrieval (Real-time)
@@ -94,8 +94,8 @@ The original design considered ChromaDB but rejected it:
 ### Why sentence-transformers instead of an API embedding model?
 
 - Local inference = no latency, no API costs, no rate limits
-- `all-MiniLM-L6-v2` is 22MB, runs in <100ms on CPU
-- 384 dims is sufficient for the scale of this knowledge base
+- `BAAI/bge-base-en-v1.5` is ~110MB, runs in ~150ms on CPU
+- 768 dims provides better cross-domain retrieval for diverse knowledge
 - An API-based model (e.g., OpenAI ada-002) would be architecturally compatible but unnecessary
 
 ### Why LLM distillation instead of keyword extraction?
@@ -106,7 +106,7 @@ Raw keyword extraction captures what was said, not what matters. The LLM distill
 - Classifies entries by type (decision/correction/preference/project/personal)
 - Produces natural-language bodies that embed well
 
-The tradeoff is token cost (mitigated by using Gemini Flash for distillation) and potential for hallucination in the distilled memory (mitigated by low temperature and clear schema).
+The tradeoff is token cost (mitigated by using smaller models for distillation) and potential for hallucination in the distilled memory (mitigated by low temperature and clear schema).
 
 ### Why soft deletes?
 

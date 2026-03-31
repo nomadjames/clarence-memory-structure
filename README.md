@@ -51,7 +51,7 @@ Raw session transcripts (OpenClaw JSONL) are processed nightly by `scripts/conve
 
 ### 3. Vector Search (RAG)
 
-Active memories and facts are embedded using `sentence-transformers` (`all-MiniLM-L6-v2`, 384 dims) and stored in `sqlite-vec` virtual tables. This enables semantic retrieval — agents can ask "what does James think about X?" and get relevant memories ranked by cosine similarity.
+Active memories and facts are embedded using `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims) and stored in `sqlite-vec` virtual tables. This enables semantic retrieval — agents can ask "what does James think about X?" and get relevant memories ranked by cosine similarity.
 
 The pipeline:
 1. **`rag-pipeline/embedding_pipeline.py`** — embeds new/changed records nightly

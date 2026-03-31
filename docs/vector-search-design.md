@@ -12,16 +12,16 @@ The system uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector st
 
 ## Embedding Model
 
-**Model:** `all-MiniLM-L6-v2`
-**Dimensions:** 384
-**Size:** ~22MB
-**Inference:** CPU-only, ~50-100ms per text on i7-7820X
+**Model:** `BAAI/bge-base-en-v1.5`
+**Dimensions:** 768
+**Size:** ~110MB
+**Inference:** CPU-only, ~150ms per text on i7-7820X
 
-This model is a good tradeoff for this use case:
-- Small enough to load quickly and run without GPU
-- 384 dims keeps the vec tables small
-- Semantic quality is sufficient for personal knowledge retrieval
-- Available via `sentence-transformers` pip package
+Upgraded from `all-MiniLM-L6-v2` (384d) on 2026-03-30. BGE-base outperforms
+MiniLM on diverse, cross-domain retrieval which matters for a knowledge base
+spanning UX, FM synthesis, accessibility, philosophy, and project context.
+Tradeoffs: larger model, slightly slower inference, 2x storage for vectors.
+At the current scale (~3K memories, ~9K facts), these are non-issues.
 
 ---
 
@@ -37,7 +37,7 @@ We got burned last quarter when mock/prod divergence masked a broken migration.
 Don't mock the database in tests — use a real SQLite file or the actual DB.
 ```
 
-Stored in: `vec_memories(memory_id, embedding FLOAT[384])`
+Stored in: `vec_memories(memory_id, embedding FLOAT[768])`
 
 ### Facts
 Text representation: `"{entity_name} — {key}: {value}"`
@@ -48,7 +48,7 @@ ipad-synthesizer — status: in active development as of 2026-03
 ipad-synthesizer — tech_stack: Swift, AudioKit, iPad-first UI
 ```
 
-Stored in: `vec_facts(fact_id, embedding FLOAT[384])`
+Stored in: `vec_facts(fact_id, embedding FLOAT[768])`
 
 ---
 
@@ -61,7 +61,7 @@ sqlite-vec uses virtual tables. Creating `vec_memories` with `vec0` automaticall
 CREATE VIRTUAL TABLE vec_memories
 USING vec0(
     memory_id INTEGER PRIMARY KEY,
-    embedding FLOAT[384]
+    embedding FLOAT[768]
 );
 
 -- Auto-created shadow tables (managed by vec0, don't touch manually):
@@ -84,7 +84,7 @@ Run nightly by cron (`rag-pipeline/embedding_pipeline.py`):
 4. Diff: find memories not yet embedded
 5. Build text repr for each new memory
 6. model.encode(texts) → numpy array of shape [N, 384]
-7. struct.pack("384f", *embedding) → bytes for sqlite-vec
+7. struct.pack("768f", *embedding) → bytes for sqlite-vec
 8. INSERT OR REPLACE INTO vec_memories(memory_id, embedding) VALUES (?, ?)
 9. Update rag_meta(last_run) timestamp
 ```
@@ -98,7 +98,7 @@ Same process for facts via `vec_facts`.
 ```python
 # Embed the query
 q_vec = model.encode(["what does James think about testing?"])[0]
-q_bytes = struct.pack("384f", *q_vec.tolist())
+q_bytes = struct.pack("768f", *q_vec.tolist())
 
 # KNN search in sqlite-vec
 results = conn.execute("""
@@ -118,10 +118,10 @@ The `MATCH` + `k = N` syntax is sqlite-vec's KNN query interface. Distance is L2
 
 ## Incremental Updates
 
-The pipeline is incremental — it only embeds new/changed records:
-- Deleted memories: `status='invalid'` records are excluded from queries but their embeddings remain in vec tables (orphaned, harmless)
-- Updated memories: the pipeline does **not** re-embed updated memories unless explicitly triggered. If a memory's body changes significantly, manually delete its vec_memories row to force re-embedding on next run.
-- New memories: automatically picked up on next nightly run
+The pipeline is incremental:
+- **New records:** automatically embedded on next nightly run
+- **Updated records:** re-embedded if `updated_at > last_embed_run` (old vector deleted first)
+- **Deleted records:** `status='invalid'` vectors are cleaned up at pipeline start via `cleanup_orphans()`
 
 For immediate updates (e.g., after a major distillation run), run:
 ```bash
@@ -132,13 +132,13 @@ python3 rag-pipeline/embedding_pipeline.py
 
 ## Limitations & Known Issues
 
-1. **No re-embedding on update.** If a memory's body changes, the old embedding persists until manually cleared. The semantic search may return stale results for recently-updated memories.
+1. **~~No re-embedding on update.~~** Fixed. The pipeline now tracks `last_embed_run` and re-embeds any memory/fact whose `updated_at` exceeds it.
 
-2. **Soft-deleted memories aren't removed from vec tables.** Querying with `m.status = 'active'` handles this at query time, but the vec table grows over time. Periodic cleanup: `DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories WHERE status='active')`.
+2. **~~Soft-deleted memories aren't removed from vec tables.~~** Fixed. The pipeline runs `cleanup_orphans()` at startup to purge vectors for invalidated records.
 
 3. **No chunking for long memories.** Long bodies are embedded as one unit. If a memory's body is >512 tokens, the tail gets truncated by the tokenizer. For the current scale of memories (most <500 chars), this is not an issue.
 
-4. **Cold start.** If `all-MiniLM-L6-v2` is not cached locally, the first embedding run will download it (~22MB). Subsequent runs load from cache.
+4. **Cold start.** If `BAAI/bge-base-en-v1.5` is not cached locally, the first embedding run will download it (~110MB). Subsequent runs load from cache.
 
 ---
 

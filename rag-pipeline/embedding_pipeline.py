@@ -14,8 +14,8 @@ import os
 from datetime import datetime
 
 DB_PATH = os.environ.get("CLARENCE_DB", "./clarence.db")
-MODEL_NAME = "all-MiniLM-L6-v2"
-DIMS = 384
+MODEL_NAME = "BAAI/bge-base-en-v1.5"
+DIMS = 768
 
 def get_embedding_model():
     from sentence_transformers import SentenceTransformer
@@ -30,14 +30,14 @@ def setup_vec_tables(conn):
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories
         USING vec0(
             memory_id INTEGER PRIMARY KEY,
-            embedding FLOAT[384]
+            embedding FLOAT[768]
         )
     """)
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts
         USING vec0(
             fact_id INTEGER PRIMARY KEY,
-            embedding FLOAT[384]
+            embedding FLOAT[768]
         )
     """)
     conn.execute("""
