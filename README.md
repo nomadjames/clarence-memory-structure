@@ -40,18 +40,23 @@ Raw session transcripts (OpenClaw JSONL) are processed nightly by `scripts/conve
 |---|---|
 | `memories` | Named, typed, searchable knowledge records |
 | `entities` | People, projects, tools, agents, concepts |
-| `facts` | Key-value attributes of entities |
+| `facts` | Key-value attributes of entities (with supersession chains) |
+| `entity_relations` | Typed relationships between entities (knowledge graph edges) |
 | `sessions` | Session summaries and work done |
 | `work_items` | Tracked tasks and completions |
 | `interactions` | James corrections/confirmations/preferences |
 | `profiles` | Deterministic identity facts (agent name, user prefs) |
+| `obsidian_sync` | Vault-to-DB sync tracking |
+| `vault_notes` | Indexed Obsidian notes metadata |
+| `vault_fact_extraction` | Tracks which vault notes have had entities extracted |
 | `daily_logs` | Per-day summaries |
 | `conversation_distills` | Audit trail of distillation runs |
-| `vault_notes` | Indexed Obsidian notes metadata |
+| `distill_batch_progress` | Batch-level progress for incremental distillation |
+| `rag_meta` | Key-value metadata for the RAG/embedding pipeline |
 
 ### 3. Vector Search (RAG)
 
-Active memories and facts are embedded using `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims) and stored in `sqlite-vec` virtual tables. This enables semantic retrieval — agents can ask "what does James think about X?" and get relevant memories ranked by cosine similarity.
+Active memories and facts are embedded using `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims) and stored in `sqlite-vec` virtual tables (`vec_memories`, `vec_facts`). Legacy 384-dim tables from `all-MiniLM-L6-v2` still exist (`vec_memories_384`, `vec_facts_384`) but are not actively used. This enables semantic retrieval — agents can ask "what does James think about X?" and get relevant memories ranked by cosine similarity.
 
 The pipeline:
 1. **`rag-pipeline/embedding_pipeline.py`** — embeds new/changed records nightly
@@ -127,6 +132,20 @@ python3 rag-pipeline/retrieval.py "what does James think about agent UX?"
 - **Soft deletes everywhere** — memories have `status` (active/invalid), facts have `status`, supersession chains preserve history
 - **Agent-agnostic** — any agent with MCP access can read/write the same knowledge store
 - **Obsidian integration** — vault notes are indexed into `vault_notes`, facts extracted into the entity graph
+
+---
+
+## Current Scale (2026-03-31)
+
+- 1,879 entities
+- 9,388 facts
+- 3,497 memories
+- 1,216 vault notes
+- 89 profiles
+- 14 sessions logged
+- Database size: ~50MB
+- Embedding model: `BAAI/bge-base-en-v1.5` (768-dim)
+- Legacy embeddings: `all-MiniLM-L6-v2` (384-dim, retained but inactive)
 
 ---
 
