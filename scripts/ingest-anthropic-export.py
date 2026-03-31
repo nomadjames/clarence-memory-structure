@@ -93,7 +93,7 @@ def build_extraction_prompt(conversation_summaries):
 
     return f"""You are a knowledge extraction system for a personal AI assistant.
 
-Below are summaries of conversations between the user and Claude on claude.ai.
+Below are summaries of conversations between James Dishman and Claude on claude.ai.
 Extract structured entities and facts that would be useful for a personal knowledge database.
 
 ## Extract:
@@ -133,9 +133,10 @@ If nothing worth extracting, return `[]`.
 
 
 def call_model(prompt):
-    """Send prompt to an OpenAI-compatible LLM endpoint."""
+    """Send prompt to cc-forge or fallback."""
     endpoints = [
-        (os.environ.get("LLM_API_URL", "http://127.0.0.1:11434/v1/chat/completions"), os.environ.get("LLM_API_KEY", ""), os.environ.get("LLM_MODEL", "minimax-m2.7:cloud"), 4096),
+        ("http://127.0.0.1:8321/v1/chat/completions", "cc-forge", "gemini-2.0-flash", 4096),
+        ("http://127.0.0.1:11434/v1/chat/completions", "OLLAMA_API_KEY", "minimax-m2.7:cloud", 4096),
     ]
 
     for url, key, model, max_tokens in endpoints:
