@@ -165,6 +165,33 @@ Create or update a profile entry.
 
 ---
 
+### `entity_relate`
+Create a typed relationship between two entities.
+
+**Parameters:**
+- `from_name` (required) — source entity name
+- `relation` (required) — relationship type (e.g., `uses`, `built_by`, `depends_on`, `related_to`, `part_of`)
+- `to_name` (required) — target entity name
+- `context` (optional) — why this relation exists
+
+**Returns:** `{status: "created"/"updated", from, relation, to}`
+
+**Use when:** Recording structural relationships between entities (e.g., "SensorSynthFM uses AudioKit", "James built_by Clarence"). These are traversable links, not flat fact strings.
+
+---
+
+### `entity_relations_get`
+Get all relationships involving a named entity.
+
+**Parameters:**
+- `name` (required) — entity name
+
+**Returns:** `{entity, outgoing: [{to_entity, relation, context}], incoming: [{from_entity, relation, context}]}`
+
+**Use when:** Understanding how an entity connects to others in the knowledge graph.
+
+---
+
 ### `memory_semantic_search`
 Vector similarity search across memories and facts. Uses the same embedding model (`BAAI/bge-base-en-v1.5`) as the nightly pipeline.
 

@@ -124,6 +124,7 @@ Memory correctness matters more than storage efficiency. When James corrects a p
 | `memories` | Knowledge | Named records: user prefs, feedback, project context, references |
 | `entities` | Knowledge | Named objects: people, projects, tools, agents, concepts |
 | `facts` | Knowledge | Key-value attributes of entities |
+| `entity_relations` | Knowledge | Typed links between entities (uses, built_by, depends_on) |
 | `profiles` | Identity | Deterministic lookups for agent name, user prefs, project constants |
 | `sessions` | Activity | Session summaries, work done, key decisions |
 | `work_items` | Activity | Tracked tasks with type/status/description |

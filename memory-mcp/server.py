@@ -277,6 +277,61 @@ def memory_invalidate(name: str, reason: str = None, author_agent: str = "claren
     conn.close()
     return {"status": "invalidated", "name": name, "reason": reason}
 
+def entity_relate(from_name: str, relation: str, to_name: str, context: str = None):
+    """Create a typed relationship between two entities."""
+    conn = get_conn()
+    from_row = conn.execute("SELECT id FROM entities WHERE name=?", (from_name,)).fetchone()
+    to_row = conn.execute("SELECT id FROM entities WHERE name=?", (to_name,)).fetchone()
+    if not from_row:
+        conn.close()
+        return {"error": f"Entity '{from_name}' not found"}
+    if not to_row:
+        conn.close()
+        return {"error": f"Entity '{to_name}' not found"}
+    try:
+        conn.execute(
+            "INSERT INTO entity_relations (from_entity, relation, to_entity, context) VALUES (?,?,?,?)",
+            (from_row["id"], relation, to_row["id"], context)
+        )
+        conn.commit()
+        result = {"status": "created", "from": from_name, "relation": relation, "to": to_name}
+    except sqlite3.IntegrityError:
+        conn.execute(
+            "UPDATE entity_relations SET context=?, status='active', created_at=unixepoch() WHERE from_entity=? AND relation=? AND to_entity=?",
+            (context, from_row["id"], relation, to_row["id"])
+        )
+        conn.commit()
+        result = {"status": "updated", "from": from_name, "relation": relation, "to": to_name}
+    conn.close()
+    return result
+
+def entity_relations_get(name: str):
+    """Get all relationships where the named entity is involved."""
+    conn = get_conn()
+    entity = conn.execute("SELECT id FROM entities WHERE name=?", (name,)).fetchone()
+    if not entity:
+        conn.close()
+        return {"error": f"Entity '{name}' not found"}
+    eid = entity["id"]
+    outgoing = conn.execute("""
+        SELECT e.name AS to_entity, r.relation, r.context
+        FROM entity_relations r
+        JOIN entities e ON r.to_entity = e.id
+        WHERE r.from_entity = ? AND r.status = 'active'
+    """, (eid,)).fetchall()
+    incoming = conn.execute("""
+        SELECT e.name AS from_entity, r.relation, r.context
+        FROM entity_relations r
+        JOIN entities e ON r.from_entity = e.id
+        WHERE r.to_entity = ? AND r.status = 'active'
+    """, (eid,)).fetchall()
+    conn.close()
+    return {
+        "entity": name,
+        "outgoing": [dict(r) for r in outgoing],
+        "incoming": [dict(r) for r in incoming]
+    }
+
 def memory_semantic_search(query: str, top_k: int = 5):
     """Semantic search across memories and facts using vector similarity."""
     model = _get_embedding_model()
@@ -483,6 +538,29 @@ TOOLS = {
             "required": ["name"]
         }
     },
+    "entity_relate": {
+        "description": "Create a typed relationship between two entities (e.g., 'SensorSynthFM uses AudioKit').",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from_name": {"type": "string", "description": "Source entity name"},
+                "relation": {"type": "string", "description": "Relationship type (e.g., uses, built_by, depends_on, related_to)"},
+                "to_name": {"type": "string", "description": "Target entity name"},
+                "context": {"type": "string", "description": "Why this relation exists"}
+            },
+            "required": ["from_name", "relation", "to_name"]
+        }
+    },
+    "entity_relations_get": {
+        "description": "Get all relationships involving a named entity (both outgoing and incoming).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Entity name"}
+            },
+            "required": ["name"]
+        }
+    },
     "memory_semantic_search": {
         "description": "Semantic search across memories and facts using vector similarity. Use this when you don't know exact keywords but know what concept you're looking for.",
         "inputSchema": {
@@ -511,6 +589,8 @@ DISPATCH = {
     "profile_set": lambda a: profile_set(**a),
     "memory_invalidate": lambda a: memory_invalidate(**a),
     "memory_semantic_search": lambda a: memory_semantic_search(**a),
+    "entity_relate": lambda a: entity_relate(**a),
+    "entity_relations_get": lambda a: entity_relations_get(**a),
 }
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────

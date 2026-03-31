@@ -47,6 +47,23 @@ CREATE TABLE IF NOT EXISTS memories (
     confidence   REAL DEFAULT 1.0
 );
 
+-- ── Entity Relations ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS entity_relations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_entity   INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    relation      TEXT NOT NULL,          -- e.g. 'uses', 'built_by', 'depends_on', 'related_to'
+    to_entity     INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    context       TEXT,                   -- why this relation exists
+    created_at    INTEGER DEFAULT (unixepoch()),
+    author_agent  TEXT DEFAULT 'clarence',
+    status        TEXT NOT NULL DEFAULT 'active',
+    UNIQUE(from_entity, relation, to_entity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relations_from ON entity_relations(from_entity);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON entity_relations(to_entity);
+
 -- ── Session & Work Tracking ────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS sessions (
