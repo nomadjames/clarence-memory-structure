@@ -10,12 +10,11 @@ import sqlite_vec
 import struct
 import json
 import sys
-import os
 from datetime import datetime
 
-DB_PATH = os.environ.get("CLARENCE_DB", "./clarence.db")
-MODEL_NAME = "BAAI/bge-base-en-v1.5"
-DIMS = 768
+DB_PATH = "/home/james/.openclaw/workspace/memory/clarence.db"
+MODEL_NAME = "all-MiniLM-L6-v2"
+DIMS = 384
 
 def get_embedding_model():
     from sentence_transformers import SentenceTransformer
@@ -27,17 +26,17 @@ def serialize(vector):
 
 def setup_vec_tables(conn):
     conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories_384
         USING vec0(
             memory_id INTEGER PRIMARY KEY,
-            embedding FLOAT[768]
+            embedding FLOAT[384]
         )
     """)
     conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts_384
         USING vec0(
             fact_id INTEGER PRIMARY KEY,
-            embedding FLOAT[768]
+            embedding FLOAT[384]
         )
     """)
     conn.execute("""
@@ -48,32 +47,9 @@ def setup_vec_tables(conn):
     """)
     conn.commit()
 
-def cleanup_orphans(conn):
-    """Remove embeddings for memories/facts that are no longer active."""
-    deleted_mems = conn.execute("""
-        DELETE FROM vec_memories
-        WHERE memory_id NOT IN (SELECT id FROM memories WHERE status = 'active')
-    """).rowcount
-    deleted_facts = conn.execute("""
-        DELETE FROM vec_facts
-        WHERE fact_id NOT IN (SELECT id FROM facts WHERE status = 'active')
-    """).rowcount
-    conn.commit()
-    if deleted_mems or deleted_facts:
-        print(f"Cleaned up {deleted_mems} orphaned memory vectors, {deleted_facts} orphaned fact vectors.")
-
-def get_last_embed_run(conn):
-    """Get the timestamp of the last embedding run."""
-    row = conn.execute("SELECT value FROM rag_meta WHERE key = 'last_embed_run'").fetchone()
-    if row:
-        return int(row[0])
-    return 0
-
 def embed_memories(conn, model):
-    last_run = get_last_embed_run(conn)
-
     rows = conn.execute("""
-        SELECT id, name, description, body, updated_at
+        SELECT id, name, description, body
         FROM memories
         WHERE status = 'active'
     """).fetchall()
@@ -83,42 +59,29 @@ def embed_memories(conn, model):
         return 0
 
     # Get already-embedded IDs
-    existing = {r[0] for r in conn.execute("SELECT memory_id FROM vec_memories").fetchall()}
+    existing = {r[0] for r in conn.execute("SELECT memory_id FROM vec_memories_384").fetchall()}
+    new_rows = [r for r in rows if r[0] not in existing]
 
-    # Find memories that are new OR updated since last embed run
-    to_embed = []
-    for r in rows:
-        if r[0] not in existing:
-            to_embed.append(r)
-        elif r[4] and r[4] > last_run:
-            # Memory was updated since last embed — delete old vector first
-            conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", (r[0],))
-            to_embed.append(r)
-
-    if not to_embed:
-        print(f"All {len(rows)} memories already embedded and current.")
+    if not new_rows:
+        print(f"All {len(rows)} memories already embedded.")
         return 0
 
-    new_count = sum(1 for r in to_embed if r[0] not in existing)
-    updated_count = len(to_embed) - new_count
-    print(f"Embedding {len(to_embed)} memories ({new_count} new, {updated_count} updated, of {len(rows)} total)...")
+    print(f"Embedding {len(new_rows)} new memories (of {len(rows)} total)...")
 
-    texts = [f"{r[1]}: {r[2] or ''}\n{r[3]}" for r in to_embed]
+    texts = [f"{r[1]}: {r[2] or ''}\n{r[3]}" for r in new_rows]
     embeddings = model.encode(texts, show_progress_bar=False)
 
-    for row, emb in zip(to_embed, embeddings):
+    for row, emb in zip(new_rows, embeddings):
         conn.execute(
-            "INSERT INTO vec_memories(memory_id, embedding) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO vec_memories_384(memory_id, embedding) VALUES (?, ?)",
             (row[0], serialize(emb.tolist()))
         )
     conn.commit()
-    return len(to_embed)
+    return len(new_rows)
 
 def embed_facts(conn, model):
-    last_run = get_last_embed_run(conn)
-
     rows = conn.execute("""
-        SELECT f.id, e.name, f.key, f.value, f.updated_at
+        SELECT f.id, e.name, f.key, f.value
         FROM facts f
         JOIN entities e ON f.entity_id = e.id
         WHERE f.status = 'active'
@@ -128,34 +91,25 @@ def embed_facts(conn, model):
         print("No active facts to embed.")
         return 0
 
-    existing = {r[0] for r in conn.execute("SELECT fact_id FROM vec_facts").fetchall()}
+    existing = {r[0] for r in conn.execute("SELECT fact_id FROM vec_facts_384").fetchall()}
+    new_rows = [r for r in rows if r[0] not in existing]
 
-    to_embed = []
-    for r in rows:
-        if r[0] not in existing:
-            to_embed.append(r)
-        elif r[4] and r[4] > last_run:
-            conn.execute("DELETE FROM vec_facts WHERE fact_id = ?", (r[0],))
-            to_embed.append(r)
-
-    if not to_embed:
-        print(f"All {len(rows)} facts already embedded and current.")
+    if not new_rows:
+        print(f"All {len(rows)} facts already embedded.")
         return 0
 
-    new_count = sum(1 for r in to_embed if r[0] not in existing)
-    updated_count = len(to_embed) - new_count
-    print(f"Embedding {len(to_embed)} facts ({new_count} new, {updated_count} updated, of {len(rows)} total)...")
+    print(f"Embedding {len(new_rows)} new facts (of {len(rows)} total)...")
 
-    texts = [f"{r[1]} — {r[2]}: {r[3]}" for r in to_embed]
+    texts = [f"{r[1]} — {r[2]}: {r[3]}" for r in new_rows]
     embeddings = model.encode(texts, show_progress_bar=False)
 
-    for row, emb in zip(to_embed, embeddings):
+    for row, emb in zip(new_rows, embeddings):
         conn.execute(
-            "INSERT INTO vec_facts(fact_id, embedding) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO vec_facts_384(fact_id, embedding) VALUES (?, ?)",
             (row[0], serialize(emb.tolist()))
         )
     conn.commit()
-    return len(to_embed)
+    return len(new_rows)
 
 def main():
     print(f"[{datetime.now().isoformat()}] RAG embed starting...")
@@ -166,7 +120,6 @@ def main():
     conn.enable_load_extension(False)
 
     setup_vec_tables(conn)
-    cleanup_orphans(conn)
 
     print("Loading embedding model...")
     model = get_embedding_model()
@@ -174,14 +127,9 @@ def main():
     m_count = embed_memories(conn, model)
     f_count = embed_facts(conn, model)
 
-    now = datetime.now()
     conn.execute(
         "INSERT OR REPLACE INTO rag_meta(key, value) VALUES ('last_run', ?)",
-        (now.isoformat(),)
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO rag_meta(key, value) VALUES ('last_embed_run', ?)",
-        (str(int(now.timestamp())),)
+        (datetime.now().isoformat(),)
     )
     conn.commit()
     conn.close()
