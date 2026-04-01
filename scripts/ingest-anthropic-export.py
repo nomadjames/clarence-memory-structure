@@ -133,9 +133,9 @@ If nothing worth extracting, return `[]`.
 
 
 def call_model(prompt):
-    """Send prompt to cc-forge or fallback."""
+    """Send prompt to model-bridge or fallback."""
     endpoints = [
-        ("http://127.0.0.1:8321/v1/chat/completions", "cc-forge", "gemini-2.0-flash", 4096),
+        ("http://127.0.0.1:8321/v1/chat/completions", "model-bridge", "gemini-2.0-flash", 4096),
         ("http://127.0.0.1:11434/v1/chat/completions", "OLLAMA_API_KEY", "minimax-m2.7:cloud", 4096),
     ]
 

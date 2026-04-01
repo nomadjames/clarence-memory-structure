@@ -215,9 +215,9 @@ def distill_with_model(prompt):
     """Send the distill prompt to a model and parse the result."""
     import subprocess
 
-    # Try cc-forge first, fall back to Ollama
+    # Try model-bridge first, fall back to Ollama
     endpoints = [
-        ("http://127.0.0.1:8321/v1/chat/completions", "cc-forge", "gemini-2.0-flash", 4096),
+        ("http://127.0.0.1:8321/v1/chat/completions", "model-bridge", "gemini-2.0-flash", 4096),
         ("http://127.0.0.1:11434/v1/chat/completions", "OLLAMA_API_KEY", "minimax-m2.7:cloud", 4096),
     ]
 
