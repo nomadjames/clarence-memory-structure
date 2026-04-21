@@ -1,151 +1,147 @@
 # Memory Architecture
 
-Clarence's memory system is designed around a single principle: **everything in one place, zero infrastructure overhead**. One SQLite file. No Redis, no Postgres, no external vector database. The file lives at `~/.openclaw/workspace/memory/clarence.db` and is backed up to Google Drive via rclone.
+Clarence's memory system is built around a simple rule: keep the durable knowledge path local, inspectable, and easy to back up. The shared SQLite database still lives under `~/.openclaw/workspace/memory/clarence.db` in the current deployment, but that path is legacy storage compatibility, not proof that OpenClaw is the active runtime.
+
+The live runtime is **Hermes**.
 
 ---
 
-## The Memory Stack
+## The memory stack
 
+```text
+                ┌──────────────────────────────┐
+                │        Hermes runtime        │
+                │  reads context, writes back  │
+                └──────────────┬───────────────┘
+                               │
+                  internal write-capable MCP
+                               │
+        ┌──────────────────────▼──────────────────────┐
+        │            Clarence memory server           │
+        │     memories, entities, facts, sessions     │
+        │     work_items, profiles, interactions      │
+        └──────────────────────┬──────────────────────┘
+                               │ sqlite3
+        ┌──────────────────────▼──────────────────────┐
+        │              clarence.db (SQLite)           │
+        │                                              │
+        │  memories   entities   facts   profiles      │
+        │  sessions   work_items interactions          │
+        │  vault_notes daily_logs rag metadata         │
+        │  vec_memories_384   vec_facts_384            │
+        └──────────────────────┬──────────────────────┘
+                               │
+                    read-only retrieval surfaces
+                               │
+        ┌──────────────────────▼──────────────────────┐
+        │ bounded lookup clients and public-safe MCP  │
+        │ search, semantic retrieval, entity lookup   │
+        └─────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Agent (LLM)                          │
-│    Session starts → reads context → works → writes back     │
-└────────────────────┬───────────────────────────────────────┘
-                     │ MCP (stdio)
-        ┌────────────▼────────────┐
-        │    memory-mcp/server.py │  ← CRUD interface
-        │    brain-mcp/server.py  │  ← aggregated reads
-        └────────────┬────────────┘
-                     │ sqlite3
-        ┌────────────▼────────────────────────────────────────┐
-        │              clarence.db (SQLite)                   │
-        │                                                     │
-        │  memories    entities    facts    sessions          │
-        │  work_items  profiles    interactions               │
-        │  daily_logs  vault_notes                            │
-        │                                                     │
-        │  vec_memories  vec_facts  (sqlite-vec extension)    │
-        └─────────────────────────────────────────────────────┘
-                     ↑
-        ┌────────────┴────────────┐
-        │   Offline Pipelines     │
-        │  conversation-distill   │  ← nightly: sessions → memories
-        │  rag-embed              │  ← nightly: memories → vectors
-        │  vault-indexer          │  ← 30min: vault notes → vault_notes
-        │  ingest-anthropic-export│  ← one-time: claude.ai export → entities
-        └─────────────────────────┘
-```
+
+The important boundary is not the file path. It is the access model:
+
+- Hermes owns durable writes
+- bounded external clients read without mutating the store
 
 ---
 
-## Data Flow
+## Data flow
 
-### Path 1: Conversation → Memory (Nightly)
+### Path 1: Conversation to memory
 
-1. OpenClaw stores every session as a JSONL file in `~/.openclaw/agents/main/sessions/`
-2. `scripts/conversation-distill.py` runs nightly via cron at 3am
-3. For each unprocessed session file:
-   - Extracts user/assistant message pairs (skips tool calls, system messages)
-   - Groups pairs into batches of 40
-   - Sends each batch to a local LLM via an OpenAI-compatible endpoint
-   - LLM returns structured JSON: `[{type, name, description, body, tags}]`
-   - Records are written to `memories` table with `author_agent = 'conversation-distill'`
-4. Deduplication: exact-match on `name` field; updates body if content changed
+1. Session artifacts are recorded by the live system
+2. Distillation jobs process unhandled conversation material
+3. The distillation step extracts durable items such as preferences, corrections, decisions, and project state
+4. Structured records are written to the `memories` table with audit metadata
 
-### Path 2: Memory → Vector (Nightly)
+Some session artifacts still persist under legacy `~/.openclaw/...` paths. That does not change the runtime identity.
 
-1. `rag-pipeline/embedding_pipeline.py` runs after distillation
-2. Fetches all `active` memories and facts not yet in vec tables
-3. Builds text representations:
-   - Memories: `"{name}: {description}\n{body}"`
-   - Facts: `"{entity_name} — {key}: {value}"`
-4. Embeds via `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims)
-5. Stores in `vec_memories` and `vec_facts` (sqlite-vec virtual tables)
+### Path 2: Memory to vectors
 
-### Path 3: Agent Query → Semantic Retrieval (Real-time)
+1. The embedding pipeline reads active memories and facts
+2. It builds normalized text representations for each record
+3. It embeds them with the current local retrieval model
+4. It stores the vectors in `sqlite-vec` tables such as `vec_memories_384` and `vec_facts_384`
 
-1. At session start, agent may call `memory_search` (keyword) or `rag-query` (semantic)
-2. For semantic: query text is embedded using same model
-3. sqlite-vec performs KNN search using cosine distance
-4. Top-K results joined against `memories`/`facts` tables to get full records
-5. Injected into agent context
+Separate evaluation tables may exist for experiments. The stable production shape is still local SQLite plus sqlite-vec.
 
-### Path 4: Vault Notes → Entity Graph (Every 30 min)
+### Path 3: Query to retrieval
 
-1. `scripts/vault-index.sh` runs every 30 min
-2. Scans `~/vault/` for Markdown files with YAML frontmatter
-3. Extracts `topic`, `project`, `date`, `status`, `tags`, `title`, `summary`
-4. Writes to `vault_notes` table
-5. `vault-to-facts.py` then extracts entities/facts from note content
+1. A client performs keyword, profile, entity, or semantic lookup
+2. For semantic search, the query is embedded with the same primary local model
+3. sqlite-vec performs KNN search against the active tables
+4. Matching IDs are joined back to SQLite rows
+5. The caller receives records, facts, or relationship context
+
+### Path 4: Notes to knowledge graph
+
+1. Vault content is indexed on a schedule
+2. Note metadata is written to `vault_notes`
+3. Entity and fact extraction can connect note content to the broader graph
 
 ---
 
-## Key Design Decisions
+## Key design decisions
 
-### Why SQLite + sqlite-vec instead of a dedicated vector DB?
+### Why SQLite plus sqlite-vec?
 
-The original design considered ChromaDB but rejected it:
-- ChromaDB requires a separate process and separate data directory
-- sqlite-vec embeds vector search directly in the SQLite file
-- One backup, one sync, one connection string
-- sqlite-vec uses the same KNN algorithm (cosine similarity on FLOAT[384])
-- Performance is adequate for tens of thousands of vectors on a CPU-only machine
+The original design looked at standalone vector stores, including ChromaDB. SQLite plus sqlite-vec won because it keeps the knowledge store in one place:
 
-### Why sentence-transformers instead of an API embedding model?
+- one file to back up
+- one connection model
+- no separate vector database process
+- enough performance for the current scale on CPU-only hardware
 
-- Local inference = no latency, no API costs, no rate limits
-- `BAAI/bge-base-en-v1.5` is ~110MB, runs in ~150ms on CPU
-- 768 dims provides better cross-domain retrieval for diverse knowledge
-- An API-based model (e.g., OpenAI ada-002) would be architecturally compatible but unnecessary
+### Why keep a strict write boundary?
 
-### Why LLM distillation instead of keyword extraction?
+Because memory quality matters more than write convenience.
 
-Raw keyword extraction captures what was said, not what matters. The LLM distillation step:
-- Recognizes that "ok fine let's just use Postgres" is a decision worth keeping
-- Skips tool output, debugging loops, and generic how-to questions
-- Classifies entries by type (decision/correction/preference/project/personal)
-- Produces natural-language bodies that embed well
+If every connected client can write freely, the memory system turns into an uncurated log. The live system keeps the boundary explicit:
 
-The tradeoff is token cost (mitigated by using smaller models for distillation) and potential for hallucination in the distilled memory (mitigated by low temperature and clear schema).
+- retrieval can be broad
+- durable writes stay narrow and accountable
+
+### Why use local embedding?
+
+Local embedding keeps retrieval cheap, fast, and inspectable. It also means the retrieval layer does not depend on a paid external vector service just to function.
 
 ### Why soft deletes?
 
-Memory correctness matters more than storage efficiency. When James corrects a previous belief, we don't delete the old memory — we mark it `invalid` and create a new one with `supersedes` pointing to the old. This means:
-- We can audit what Clarence believed at any point in time
-- We can understand when/why beliefs changed
-- Accidental invalidations are recoverable
+A corrected memory is still part of the system's history.
+
+Invalidating stale memory instead of deleting it preserves audit trails, supports supersession chains, and makes reversibility possible when a correction itself was incomplete.
 
 ---
 
-## Tables Reference
+## Tables reference
 
 | Table | Type | Purpose |
 |---|---|---|
-| `memories` | Knowledge | Named records: user prefs, feedback, project context, references |
-| `entities` | Knowledge | Named objects: people, projects, tools, agents, concepts |
+| `memories` | Knowledge | Named records for preferences, feedback, project context, references |
+| `entities` | Knowledge | People, projects, tools, agents, concepts |
 | `facts` | Knowledge | Key-value attributes of entities |
-| `entity_relations` | Knowledge | Typed links between entities (uses, built_by, depends_on) |
-| `profiles` | Identity | Deterministic lookups for agent name, user prefs, project constants |
+| `entity_relations` | Knowledge | Typed links between entities |
+| `profiles` | Identity | Deterministic identity and project constants |
 | `sessions` | Activity | Session summaries, work done, key decisions |
-| `work_items` | Activity | Tracked tasks with type/status/description |
-| `interactions` | Activity | Discrete corrections, confirmations, preferences from James |
-| `daily_logs` | Activity | Per-day summary: highlights, blockers |
-| `vault_notes` | Integration | Indexed Obsidian note metadata |
+| `work_items` | Activity | Tracked tasks with type, status, and description |
+| `interactions` | Activity | Corrections, confirmations, and questions |
+| `daily_logs` | Activity | Per-day summaries |
+| `vault_notes` | Integration | Indexed note metadata |
 | `obsidian_sync` | Integration | Sync state between vault and DB |
-| `vec_memories` | Vectors | Embeddings for semantic search of memories |
-| `vec_facts` | Vectors | Embeddings for semantic search of facts |
-| `rag_meta` | Ops | Pipeline metadata (last_run timestamps) |
-| `conversation_distills` | Ops | Audit trail of distillation runs |
-| `distill_batch_progress` | Ops | Per-batch progress for large sessions (resumable) |
-| `vault_fact_extraction` | Ops | Tracks which vault notes have been extracted |
+| `vec_memories_384` | Vectors | Embeddings for semantic search of memories |
+| `vec_facts_384` | Vectors | Embeddings for semantic search of facts |
+| `rag_meta` | Ops | Retrieval metadata and timestamps |
+| `conversation_distills` | Ops | Distillation audit trail |
+| `distill_batch_progress` | Ops | Per-batch progress for resumable distillation |
+| `vault_fact_extraction` | Ops | Tracks which notes have been processed into graph data |
 
 ---
 
-## Operational Notes
+## Operational notes
 
 - **DB location:** `~/.openclaw/workspace/memory/clarence.db`
-- **Backup:** synced to `gdrive:openclaw-workspace` every 2 hours via rclone
-- **Distillation cron:** daily at 3am, runs `conversation-distill.py`
-- **Embedding cron:** daily at 3:30am, runs `rag-embed.py`
-- **Vault index cron:** every 30 min, runs `vault-index.sh`
-- **sqlite-vec extension:** loaded at runtime via `sqlite_vec.load(conn)` — must be installed as Python package or .so
+- **Runtime identity:** Hermes, not OpenClaw
+- **Path warning:** `~/.openclaw/...` is a legacy path namespace that still stores active components
+- **Write boundary:** durable writes stay on the Hermes side of the system
+- **Public-safe exports:** public docs and external surfaces should avoid exposing private entity names or internal-only wiring

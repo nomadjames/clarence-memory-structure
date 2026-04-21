@@ -1,38 +1,55 @@
 # Clarence Memory Architecture
 
-This repository documents the structural framework of Clarence's memory system — the data layer, embedding pipeline, MCP server interfaces, and operational scripts that give an AI assistant persistent, searchable memory across sessions.
+This repository documents the structural framework of Clarence's memory system: the data layer, semantic retrieval path, MCP surfaces, and operational scripts that give an AI assistant persistent, searchable memory across sessions.
 
-No personal data is included. This is the plumbing.
+This is a public-safe reference. No personal data is included. Example names are illustrative and sanitized.
 
 ---
 
-## What This Is
+## Current deployment note
 
-Clarence is a persistent AI assistant running via [OpenClaw](https://openclaw.ai). Unlike stateless LLM sessions, Clarence maintains memory across conversations using a multi-layer architecture:
+The live Clarence system runs under **Hermes**.
+
+Some files, scripts, and database paths still live under `~/.openclaw/...` for compatibility. That path namespace is not the active runtime name.
+
+Current deployment also separates two access lanes:
+
+- **Internal writer lane**: full write-capable memory tooling used by Hermes
+- **Bounded read-only lane**: search, list, and lookup workflows for inspection and retrieval
+
+Hermes remains the sole memory writer.
+
+---
+
+## What this is
+
+Clarence maintains memory across conversations through a layered pipeline:
 
 ```
-Raw Conversations (JSONL)
+Session artifacts
         ↓ conversation-distill.py
-Structured Memories (SQLite: memories, entities, facts)
-        ↓ rag-embed.py
-Vector Embeddings (sqlite-vec: vec_memories, vec_facts)
-        ↓ rag-query.py / MCP tools
-Semantic Retrieval (agents query relevant context at session start)
+Structured memory in SQLite
+        ↓ embedding pipeline
+Vector indexes in sqlite-vec
+        ↓ MCP tools and retrieval helpers
+Semantic retrieval for future work
 ```
+
+The public repo focuses on the stable structure. Exact operational counts, private examples, and internal-only wiring are intentionally omitted.
 
 ---
 
-## Memory Layers
+## Memory layers
 
-### 1. Episodic → Semantic Distillation
+### 1. Episodic to semantic distillation
 
-Raw session transcripts (OpenClaw JSONL) are processed nightly by `scripts/conversation-distill.py`. The script:
-- Extracts user/assistant message pairs
-- Sends batches to a local LLM via an OpenAI-compatible API endpoint
-- The LLM identifies durable knowledge: decisions, corrections, preferences, project updates, personal context
-- Writes structured records to the `memories` table
+Session artifacts are processed by `scripts/conversation-distill.py`. The script:
+- extracts user and assistant message pairs
+- sends batches to a local LLM through an OpenAI-compatible endpoint
+- identifies durable knowledge such as decisions, corrections, preferences, project updates, and personal context
+- writes structured records to the `memories` table
 
-### 2. SQLite Knowledge Store
+### 2. SQLite knowledge store
 
 `database/schema.sql` defines the full schema. Key tables:
 
@@ -40,71 +57,71 @@ Raw session transcripts (OpenClaw JSONL) are processed nightly by `scripts/conve
 |---|---|
 | `memories` | Named, typed, searchable knowledge records |
 | `entities` | People, projects, tools, agents, concepts |
-| `facts` | Key-value attributes of entities (with supersession chains) |
-| `entity_relations` | Typed relationships between entities (knowledge graph edges) |
+| `facts` | Key-value attributes of entities, with supersession chains |
+| `entity_relations` | Typed relationships between entities |
 | `sessions` | Session summaries and work done |
 | `work_items` | Tracked tasks and completions |
-| `interactions` | James corrections/confirmations/preferences |
-| `profiles` | Deterministic identity facts (agent name, user prefs) |
+| `interactions` | Corrections, confirmations, and preferences |
+| `profiles` | Deterministic identity facts |
 | `obsidian_sync` | Vault-to-DB sync tracking |
-| `vault_notes` | Indexed Obsidian notes metadata |
-| `vault_fact_extraction` | Tracks which vault notes have had entities extracted |
+| `vault_notes` | Indexed Obsidian note metadata |
+| `vault_fact_extraction` | Tracks which notes have had entities extracted |
 | `daily_logs` | Per-day summaries |
 | `conversation_distills` | Audit trail of distillation runs |
 | `distill_batch_progress` | Batch-level progress for incremental distillation |
-| `rag_meta` | Key-value metadata for the RAG/embedding pipeline |
+| `rag_meta` | Metadata for retrieval and embedding pipelines |
 
-### 3. Vector Search (RAG)
+### 3. Vector search
 
-Active memories and facts are embedded using `sentence-transformers` (`BAAI/bge-base-en-v1.5`, 768 dims) and stored in `sqlite-vec` virtual tables (`vec_memories`, `vec_facts`). Legacy 384-dim tables from `all-MiniLM-L6-v2` still exist (`vec_memories_384`, `vec_facts_384`) but are not actively used. This enables semantic retrieval — agents can ask "what does James think about X?" and get relevant memories ranked by cosine similarity.
+The live deployment uses `sqlite-vec` for local semantic retrieval. The current primary retrieval path uses a local 384-dimensional embedding index. Separate evaluation lanes may exist, but this repo focuses on the stable architecture rather than every experiment.
 
 The pipeline:
-1. **`rag-pipeline/embedding_pipeline.py`** — embeds new/changed records nightly
-2. **`rag-pipeline/retrieval.py`** — query-time semantic search
-3. **`rag-pipeline/distillation.py`** — conversation → structured memory (same logic as `scripts/conversation-distill.py`, refactored for clarity)
+1. **`rag-pipeline/embedding_pipeline.py`** embeds new or changed records
+2. **`rag-pipeline/retrieval.py`** handles query-time semantic search
+3. **`rag-pipeline/distillation.py`** contains the structured conversation-to-memory logic
 
-### 4. MCP Server Interface
+### 4. MCP surfaces
 
-Agents access memory through two MCP servers:
+Memory access is exposed through MCP in two practical modes:
 
-- **`memory-mcp/server.py`** — Full CRUD for memories, entities, facts, sessions, work items, profiles
-- **`brain-mcp/`** — Higher-level brain tools (if separate server exists)
+- **Internal memory server**: full CRUD for memories, entities, facts, sessions, work items, and profiles
+- **Bounded read-only connectors**: safe lookup tools for search, semantic retrieval, entity inspection, profile lookup, and recent work
 
-These run as stdio MCP servers, configured in OpenClaw's agent manifest.
+Higher-level wrappers may sit above these primitives, but the write boundary remains explicit.
 
 ---
 
-## Directory Structure
+## Directory structure
 
 ```
 clarence-memory-structure/
 ├── README.md                    # This file
 ├── database/
-│   └── schema.sql               # Full SQLite schema (empty tables only)
+│   └── schema.sql               # Full SQLite schema, empty tables only
 ├── rag-pipeline/
-│   ├── embedding_pipeline.py    # Chunking + embedding via sentence-transformers
-│   ├── retrieval.py             # Semantic query against vec_memories/vec_facts
-│   ├── distillation.py          # Conversation → structured memory pipeline
-│   └── requirements.txt         # Python deps
+│   ├── embedding_pipeline.py    # Chunking and embedding
+│   ├── retrieval.py             # Semantic query against sqlite-vec tables
+│   ├── distillation.py          # Conversation to structured memory pipeline
+│   └── requirements.txt         # Python dependencies
 ├── memory-mcp/
-│   ├── server.py                # MCP server: memory/entity/session/work tools
+│   ├── server.py                # MCP server for memory, entity, session, and work tools
 │   └── memory_tools.md          # Tool documentation
 ├── brain-mcp/
-│   ├── server.py                # Brain MCP server (higher-level tools)
+│   ├── server.py                # Optional higher-level wrapper surface
 │   └── memory_tools.md          # Tool documentation
 ├── scripts/
-│   ├── conversation-distill.py  # Nightly distillation pipeline
-│   ├── ingest-anthropic-export.py  # One-time Claude.ai export ingestion
-│   └── obsidian-sync.sh         # Vault sync to Google Drive
+│   ├── conversation-distill.py  # Distillation pipeline
+│   ├── ingest-anthropic-export.py  # One-time export ingestion
+│   └── obsidian-sync.sh         # Vault sync helper
 └── docs/
-    ├── memory-architecture.md   # System design deep-dive
-    ├── agent-memory-loop.md     # How agents interact with memory per session
-    └── vector-search-design.md  # RAG/vector search design
+    ├── memory-architecture.md   # System design deep dive
+    ├── agent-memory-loop.md     # How read and write lanes interact with memory
+    └── vector-search-design.md  # Retrieval and vector design
 ```
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
 # Install Python deps
@@ -113,44 +130,37 @@ pip install -r rag-pipeline/requirements.txt
 # Initialize database
 sqlite3 your.db < database/schema.sql
 
-# Run the memory MCP server (stdio)
+# Run the internal memory MCP server
 python3 memory-mcp/server.py
 
-# Embed all memories into vector store
+# Build embeddings
 python3 rag-pipeline/embedding_pipeline.py
 
 # Semantic search
-python3 rag-pipeline/retrieval.py "what does James think about agent UX?"
+python3 rag-pipeline/retrieval.py "project constraints and writing preferences"
 ```
 
 ---
 
-## Design Principles
+## Design principles
 
-- **No external vector DB** — sqlite-vec keeps everything in one file, zero ops overhead
-- **LLM-driven distillation** — not keyword extraction, but semantic understanding of what's worth keeping
-- **Soft deletes everywhere** — memories have `status` (active/invalid), facts have `status`, supersession chains preserve history
-- **Agent-agnostic** — any agent with MCP access can read/write the same knowledge store
-- **Obsidian integration** — vault notes are indexed into `vault_notes`, facts extracted into the entity graph
+- **No external vector database**: `sqlite-vec` keeps retrieval in the same SQLite file as the rest of the knowledge store
+- **Explicit write boundary**: not every connected client writes memory, Hermes owns durable writes in the live deployment
+- **Soft deletes everywhere**: supersession chains preserve history instead of erasing it
+- **Local-first retrieval**: retrieval stays fast and cheap on CPU-only hardware
+- **Obsidian integration**: vault notes can be indexed and connected to the entity graph
+- **Public-safe exports**: examples stay sanitized and public docs avoid exposing private entity names or internal-only wiring
 
 ---
 
-## Current Scale (2026-03-31)
+## Status note
 
-- 1,879 entities
-- 9,388 facts
-- 3,497 memories
-- 1,216 vault notes
-- 89 profiles
-- 14 sessions logged
-- Database size: ~50MB
-- Embedding model: `BAAI/bge-base-en-v1.5` (768-dim)
-- Legacy embeddings: `all-MiniLM-L6-v2` (384-dim, retained but inactive)
+This repository intentionally does not pin operational counts in the README. Counts drift quickly. If you need current scale, inspect the live system rather than treating a public snapshot as operational truth.
 
 ---
 
 ## Related
 
-- [OpenClaw](https://openclaw.ai) — the agent runtime this runs inside
-- [sqlite-vec](https://github.com/asg017/sqlite-vec) — vector search extension for SQLite
-- [sentence-transformers](https://www.sbert.net/) — local embedding model
+- Hermes, the active runtime for Clarence
+- [sqlite-vec](https://github.com/asg017/sqlite-vec), vector search for SQLite
+- [sentence-transformers](https://www.sbert.net/), local embedding tooling

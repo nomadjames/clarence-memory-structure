@@ -1,152 +1,149 @@
 # Vector Search Design
 
-How semantic/RAG search works in the Clarence memory system.
+How semantic search works in the Clarence memory system.
 
 ---
 
 ## Overview
 
-The system uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector storage and KNN search, combined with [sentence-transformers](https://www.sbert.net/) for local embedding. Everything lives in the same SQLite file as the rest of the knowledge store.
+The system uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector storage and KNN search, combined with local embedding models through [sentence-transformers](https://www.sbert.net/). Everything lives in the same SQLite file as the rest of the knowledge store.
+
+This document focuses on the current stable retrieval path. Evaluation lanes may exist beside it, but they are not the main architecture described here.
 
 ---
 
-## Embedding Model
+## Primary retrieval model
 
-**Model:** `BAAI/bge-base-en-v1.5`
-**Dimensions:** 768
-**Size:** ~110MB
-**Inference:** CPU-only, ~150ms per text on i7-7820X
+**Primary model:** `all-MiniLM-L6-v2`
 
-Upgraded from `all-MiniLM-L6-v2` (384d) on 2026-03-30. BGE-base outperforms
-MiniLM on diverse, cross-domain retrieval which matters for a knowledge base
-spanning UX, FM synthesis, accessibility, philosophy, and project context.
-Tradeoffs: larger model, slightly slower inference, 2x storage for vectors.
-At the current scale (~3K memories, ~9K facts), these are non-issues.
+**Primary dimensions:** 384
+
+**Why this doc uses cautious wording:** retrieval experiments continue over time, but the live local code currently points the main search path at a 384-dimensional local index. Public docs should reflect the stable path, not freeze every temporary experiment into architecture.
 
 ---
 
-## What Gets Embedded
+## What gets embedded
 
 ### Memories
+
 Text representation: `"{name}: {description}\n{body}"`
 
 Example:
-```
-feedback:no-mocking-db: Integration tests must hit a real database.
-We got burned last quarter when mock/prod divergence masked a broken migration.
-Don't mock the database in tests — use a real SQLite file or the actual DB.
+
+```text
+feedback:no-mock-db: Integration tests must hit a real database.
+We got burned when a mock masked a broken migration.
+Use a real SQLite file or the actual DB path instead of a fake in-memory substitute.
 ```
 
-Stored in: `vec_memories(memory_id, embedding FLOAT[768])`
+Stored in: `vec_memories_384(memory_id, embedding FLOAT[384])`
 
 ### Facts
-Text representation: `"{entity_name} — {key}: {value}"`
+
+Text representation combines the entity name, fact key, and fact value into one embedding string.
 
 Example:
-```
-ipad-synthesizer — status: in active development as of 2026-03
-ipad-synthesizer — tech_stack: Swift, AudioKit, iPad-first UI
+
+```text
+mobile-instrument-prototype: status: in active development
+mobile-instrument-prototype: tech_stack: Swift, AudioKit, sensor-driven controls
 ```
 
-Stored in: `vec_facts(fact_id, embedding FLOAT[768])`
+Stored in: `vec_facts_384(fact_id, embedding FLOAT[384])`
 
 ---
 
-## Vector Tables Schema
+## Vector tables schema
 
-sqlite-vec uses virtual tables. Creating `vec_memories` with `vec0` automatically creates several companion shadow tables:
+sqlite-vec uses virtual tables. A primary 384-dimensional table looks like this:
 
 ```sql
--- Main virtual table (what you interact with)
-CREATE VIRTUAL TABLE vec_memories
+CREATE VIRTUAL TABLE vec_memories_384
 USING vec0(
     memory_id INTEGER PRIMARY KEY,
-    embedding FLOAT[768]
+    embedding FLOAT[384]
 );
-
--- Auto-created shadow tables (managed by vec0, don't touch manually):
--- vec_memories_info       — metadata (row count, dims, etc.)
--- vec_memories_chunks     — vector storage chunks
--- vec_memories_rowids     — rowid → chunk mapping
--- vec_memories_vector_chunks00 — raw vector data
 ```
+
+A matching facts table follows the same pattern:
+
+```sql
+CREATE VIRTUAL TABLE vec_facts_384
+USING vec0(
+    fact_id INTEGER PRIMARY KEY,
+    embedding FLOAT[384]
+);
+```
+
+Companion shadow tables are created automatically by `vec0` and should not be edited manually.
 
 ---
 
-## Embedding Pipeline
+## Embedding pipeline
 
-Run nightly by cron (`rag-pipeline/embedding_pipeline.py`):
+Run by scheduled jobs through `rag-pipeline/embedding_pipeline.py`:
 
+```text
+1. Load the embedding model
+2. Read the set of already-embedded IDs from sqlite-vec tables
+3. Select active memories and facts from SQLite
+4. Find new or changed records
+5. Build normalized text representations
+6. model.encode(texts) -> vectors of shape [N, 384]
+7. Pack vectors for sqlite-vec
+8. Upsert into vec_memories_384 or vec_facts_384
+9. Update retrieval metadata timestamps
 ```
-1. Load model (sentence-transformers)
-2. SELECT id FROM vec_memories → set of already-embedded IDs
-3. SELECT * FROM memories WHERE status='active' → all active memories
-4. Diff: find memories not yet embedded
-5. Build text repr for each new memory
-6. model.encode(texts) → numpy array of shape [N, 384]
-7. struct.pack("768f", *embedding) → bytes for sqlite-vec
-8. INSERT OR REPLACE INTO vec_memories(memory_id, embedding) VALUES (?, ?)
-9. Update rag_meta(last_run) timestamp
-```
 
-Same process for facts via `vec_facts`.
+The same overall logic applies whether the run is processing memories or facts.
 
 ---
 
-## Query Time (Retrieval)
+## Query time retrieval
+
+A semantic query follows the same pattern:
 
 ```python
 # Embed the query
-q_vec = model.encode(["what does James think about testing?"])[0]
-q_bytes = struct.pack("768f", *q_vec.tolist())
+q_vec = model.encode(["What does James think about testing?"])[0]
 
-# KNN search in sqlite-vec
-results = conn.execute("""
-    SELECT m.name, m.type, m.body, vm.distance
-    FROM vec_memories vm
-    JOIN memories m ON m.id = vm.memory_id
-    WHERE vm.embedding MATCH ?
-      AND m.status = 'active'
-      AND k = 5
-    ORDER BY vm.distance
-""", (q_bytes,)).fetchall()
+# Query sqlite-vec
+# The exact SQL wrapper can vary by implementation, but the flow is:
+# 1. embed query
+# 2. run KNN against vec_memories_384 or vec_facts_384
+# 3. join result IDs back to SQLite rows
 ```
 
-The `MATCH` + `k = N` syntax is sqlite-vec's KNN query interface. Distance is L2 (Euclidean) by default; cosine similarity is available via `vec_distance_cosine()`.
+The core idea is stable even if helper functions or wrappers change: query text becomes an embedding, sqlite-vec performs KNN search, and the matching IDs are joined back to full records.
 
 ---
 
-## Incremental Updates
+## Incremental updates
 
 The pipeline is incremental:
-- **New records:** automatically embedded on next nightly run
-- **Updated records:** re-embedded if `updated_at > last_embed_run` (old vector deleted first)
-- **Deleted records:** `status='invalid'` vectors are cleaned up at pipeline start via `cleanup_orphans()`
 
-For immediate updates (e.g., after a major distillation run), run:
+- **New records:** embedded on the next scheduled run
+- **Updated records:** re-embedded when the source record changes
+- **Invalid records:** removed from active retrieval results
+
+For immediate refreshes after a large ingest or migration:
+
 ```bash
 python3 rag-pipeline/embedding_pipeline.py
 ```
 
 ---
 
-## Limitations & Known Issues
+## Limitations and known edges
 
-1. **~~No re-embedding on update.~~** Fixed. The pipeline now tracks `last_embed_run` and re-embeds any memory/fact whose `updated_at` exceeds it.
-
-2. **~~Soft-deleted memories aren't removed from vec tables.~~** Fixed. The pipeline runs `cleanup_orphans()` at startup to purge vectors for invalidated records.
-
-3. **No chunking for long memories.** Long bodies are embedded as one unit. If a memory's body is >512 tokens, the tail gets truncated by the tokenizer. For the current scale of memories (most <500 chars), this is not an issue.
-
-4. **Cold start.** If `BAAI/bge-base-en-v1.5` is not cached locally, the first embedding run will download it (~110MB). Subsequent runs load from cache.
+1. **No chunking for long records.** Very long bodies may lose detail compared with a chunked retriever.
+2. **Cold start cost.** The first retrieval call loads the embedding model into memory.
+3. **Experiment drift.** Evaluation lanes can diverge from the main path. Public docs should only describe the stable default unless a comparison is explicitly the point.
 
 ---
 
-## Scaling Considerations
+## Scaling notes
 
-Current scale: ~hundreds to low thousands of memories and facts. sqlite-vec is fast at this scale on CPU-only hardware.
+At the current scale, `sqlite-vec` is still the right tool. It keeps the retrieval path local, cheap, and easy to back up.
 
-If the knowledge base grows to millions of records:
-- Consider switching to `hnswlib` or `faiss` for ANN (approximate nearest neighbor)
-- Or migrate to a dedicated vector store (Qdrant, Weaviate)
-- The MCP server interface would remain the same; only the backend changes
+If the knowledge base grew by orders of magnitude, the retrieval backend could change without changing the MCP-level interface. That is the real architectural boundary that matters.

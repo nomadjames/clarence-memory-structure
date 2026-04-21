@@ -1,6 +1,26 @@
 # Memory MCP Tools
 
-The memory MCP server (`server.py`) exposes the Clarence knowledge database to any connected agent via the Model Context Protocol (stdio transport). All reads and writes go through this interface.
+The internal memory MCP server (`server.py`) exposes the Clarence knowledge database through the Model Context Protocol.
+
+In the live system there are two practical access modes:
+
+- **Internal writer lane**: full write-capable tooling used by Hermes
+- **Bounded read-only lane**: search, semantic retrieval, entity lookup, profile lookup, and recent-work inspection
+
+This file documents the broader internal tool family. Public or delegated connectors should assume read-only unless a narrower trusted write path is explicitly documented.
+
+## Read-only subset used by bounded clients
+
+The current bounded read-only surface centers on:
+
+- `memory_search`
+- `memory_list`
+- `memory_semantic_search`
+- `memory_hybrid_search`
+- `entity_get`
+- `entity_relations_get`
+- `profile_get`
+- `work_recent`
 
 ---
 
@@ -10,9 +30,9 @@ The memory MCP server (`server.py`) exposes the Clarence knowledge database to a
 Full-text search across the `memories` table.
 
 **Parameters:**
-- `query` (required) — search term (LIKE match against name, description, body)
-- `type` (optional) — filter to `user | feedback | project | reference`
-- `limit` (optional) — max results, default 20
+- `query` (required): search term (LIKE match against name, description, body)
+- `type` (optional): filter to `user | feedback | project | reference`
+- `limit` (optional): max results, default 20
 
 **Returns:** Array of memory records sorted by `updated_at` desc.
 
@@ -21,14 +41,14 @@ Full-text search across the `memories` table.
 ---
 
 ### `memory_write`
-Create or update a named memory record.
+Internal writer lane only. Create or update a named memory record.
 
 **Parameters:**
-- `name` (required) — unique kebab-case identifier
-- `type` (required) — `user | feedback | project | reference`
-- `description` (required) — one-line summary used for index display
-- `body` (required) — full content
-- `tags` (optional) — JSON array of tag strings
+- `name` (required): unique kebab-case identifier
+- `type` (required): `user | feedback | project | reference`
+- `description` (required): one-line summary used for index display
+- `body` (required): full content
+- `tags` (optional): JSON array of tag strings
 
 **Behavior:** If name exists, updates all fields. If new, inserts.
 
@@ -37,12 +57,12 @@ Create or update a named memory record.
 ---
 
 ### `memory_update`
-Partial update of an existing memory (body and/or description only).
+Internal writer lane only. Partial update of an existing memory body or description.
 
 **Parameters:**
-- `name` (required) — must already exist
-- `body` (optional) — new body text
-- `description` (optional) — new description
+- `name` (required): must already exist
+- `body` (optional): new body text
+- `description` (optional): new description
 
 **Use when:** Appending to or correcting an existing memory without full rewrite.
 
@@ -52,46 +72,46 @@ Partial update of an existing memory (body and/or description only).
 List all memories, optionally filtered by type.
 
 **Parameters:**
-- `type` (optional) — `user | feedback | project | reference`
+- `type` (optional): `user | feedback | project | reference`
 
-**Returns:** Array of `{name, type, description, updated_at}` — no body content (use `memory_search` to read full bodies).
+**Returns:** Array of `{name, type, description, updated_at}`: no body content (use `memory_search` to read full bodies).
 
 **Use when:** Building a summary index or checking what's in the DB.
 
 ---
 
 ### `memory_invalidate`
-Soft-delete a memory. Sets `status = 'invalid'`. Never hard-deletes.
+Internal writer lane only. Soft-delete a memory by setting `status = 'invalid'`. Never hard-deletes.
 
 **Parameters:**
 - `name` (required)
-- `reason` (optional) — why it's being invalidated
-- `author_agent` (optional) — which agent is invalidating it
+- `reason` (optional): why it's being invalidated
+- `author_agent` (optional): which agent is invalidating it
 
 **Use when:** A memory is stale, superseded, or was written in error.
 
 ---
 
 ### `session_log`
-Log a session summary to the `sessions` table.
+Internal writer lane only. Log a session summary to the `sessions` table.
 
 **Parameters:**
-- `summary` (required) — narrative description of what happened
-- `work_done` (optional) — JSON array of completed items
-- `key_decisions` (optional) — JSON array of decisions made
-- `session_id` (optional) — if omitted, auto-generates `session_<timestamp>`
+- `summary` (required): narrative description of what happened
+- `work_done` (optional): JSON array of completed items
+- `key_decisions` (optional): JSON array of decisions made
+- `session_id` (optional): if omitted, auto-generates `session_<timestamp>`
 
 ---
 
 ### `work_log`
-Log a completed (or in-progress) work item.
+Internal writer lane only. Log a completed or in-progress work item.
 
 **Parameters:**
 - `title` (required)
-- `type` (required) — `feature | fix | research | design | build | infra`
+- `type` (required): `feature | fix | research | design | build | infra`
 - `description` (optional)
-- `status` (optional) — `done | todo | in_progress | blocked` (default: done)
-- `entity_name` (optional) — link to a related entity by name
+- `status` (optional): `done | todo | in_progress | blocked` (default: done)
+- `entity_name` (optional): link to a related entity by name
 
 ---
 
@@ -99,21 +119,21 @@ Log a completed (or in-progress) work item.
 Get recently logged work items.
 
 **Parameters:**
-- `limit` (optional) — default 20
+- `limit` (optional): default 20
 
 **Returns:** Array of `{title, type, status, description, created_at}` sorted newest first.
 
 ---
 
 ### `entity_upsert`
-Create or update an entity (person, project, tool, agent, concept) with optional key-value facts.
+Internal writer lane only. Create or update an entity (person, project, tool, agent, concept) with optional key-value facts.
 
 **Parameters:**
-- `name` (required) — unique identifier
-- `type` (required) — `person | project | tool | agent | concept`
+- `name` (required): unique identifier
+- `type` (required): `person | project | tool | agent | concept`
 - `description` (optional)
-- `facts` (optional) — `{key: value}` dict of facts to set
-- `obsidian_path` (optional) — relative path in `~/vault/` if linked
+- `facts` (optional): `{key: value}` dict of facts to set
+- `obsidian_path` (optional): relative path in `~/vault/` if linked
 
 ---
 
@@ -128,55 +148,55 @@ Get an entity and all its associated facts.
 ---
 
 ### `interaction_log`
-Log a discrete James interaction — corrections, confirmations, preferences, or questions.
+Internal writer lane only. Log a discrete James interaction: correction, confirmation, preference, or question.
 
 **Parameters:**
-- `type` (required) — `correction | confirmation | preference | question`
-- `content` (required) — what was said or observed
-- `context` (optional) — surrounding context
-- `applied_rule` (optional) — which rule/memory this applies to
+- `type` (required): `correction | confirmation | preference | question`
+- `content` (required): what was said or observed
+- `context` (optional): surrounding context
+- `applied_rule` (optional): which rule/memory this applies to
 
 **Use when:** James corrects Clarence's behavior. These drive the feedback memory system.
 
 ---
 
 ### `profile_get`
-Deterministic lookup for identity facts — agent names, user preferences, project constants.
+Deterministic lookup for identity facts: agent names, user preferences, project constants.
 
 **Parameters:**
-- `category` (required) — `agent | user | project | system`
-- `key` (optional) — specific key. If omitted, returns all entries in category.
+- `category` (required): `agent | user | project | system`
+- `key` (optional): specific key. If omitted, returns all entries in category.
 
 **Returns:** Single record or array of `{category, key, value, notes}`.
 
-**Use this instead of `memory_search` for identity facts** — profiles are indexed by exact key, no fuzzy matching.
+**Use this instead of `memory_search` for identity facts**: profiles are indexed by exact key, no fuzzy matching.
 
 ---
 
 ### `profile_set`
-Create or update a profile entry.
+Internal writer lane only. Create or update a profile entry.
 
 **Parameters:**
 - `category` (required)
 - `key` (required)
 - `value` (required)
 - `notes` (optional)
-- `source` (optional) — `user | agent | inferred` (default: agent)
+- `source` (optional): `user | agent | inferred` (default: agent)
 
 ---
 
 ### `entity_relate`
-Create a typed relationship between two entities.
+Internal writer lane only. Create a typed relationship between two entities.
 
 **Parameters:**
-- `from_name` (required) — source entity name
-- `relation` (required) — relationship type (e.g., `uses`, `built_by`, `depends_on`, `related_to`, `part_of`)
-- `to_name` (required) — target entity name
-- `context` (optional) — why this relation exists
+- `from_name` (required): source entity name
+- `relation` (required): relationship type (e.g., `uses`, `built_by`, `depends_on`, `related_to`, `part_of`)
+- `to_name` (required): target entity name
+- `context` (optional): why this relation exists
 
 **Returns:** `{status: "created"/"updated", from, relation, to}`
 
-**Use when:** Recording structural relationships between entities (e.g., "SensorSynthFM uses AudioKit", "James built_by Clarence"). These are traversable links, not flat fact strings.
+**Use when:** Recording structural relationships between entities (for example, a project using a library or one system depending on another). These are traversable links, not flat fact strings.
 
 ---
 
@@ -184,7 +204,7 @@ Create a typed relationship between two entities.
 Get all relationships involving a named entity.
 
 **Parameters:**
-- `name` (required) — entity name
+- `name` (required): entity name
 
 **Returns:** `{entity, outgoing: [{to_entity, relation, context}], incoming: [{from_entity, relation, context}]}`
 
@@ -193,11 +213,11 @@ Get all relationships involving a named entity.
 ---
 
 ### `memory_semantic_search`
-Vector similarity search across memories and facts. Uses the same embedding model (`BAAI/bge-base-en-v1.5`) as the nightly pipeline.
+Vector similarity search across memories and facts. Uses the same primary local retrieval path as the embedding pipeline.
 
 **Parameters:**
-- `query` (required) — natural language query (e.g., "how does sensor data map to FM parameters?")
-- `top_k` (optional) — number of results per table, default 5 (returns up to 2x top_k merged results)
+- `query` (required): natural language query (e.g., "how does sensor data map to FM parameters?")
+- `top_k` (optional): number of results per table, default 5 (returns up to 2x top_k merged results)
 
 **Returns:** Array of `{type, name/entity, description/key, body/value, distance}` sorted by distance (lower = more similar).
 
@@ -213,13 +233,13 @@ Vector similarity search across memories and facts. Uses the same embedding mode
 |---|---|---|
 | `user` | Facts about the user's role, goals, knowledge | James is a UX student; prefers Sonnet for coding |
 | `feedback` | How Clarence should behave; corrections | Don't mock DB in tests; stop summarizing after responses |
-| `project` | Ongoing work, decisions, status | fortune-telling app: using I Ching hexagrams |
-| `reference` | Pointers to external systems/resources | Pipeline bugs tracked in Linear "INGEST" project |
+| `project` | Ongoing work, decisions, status | mobile instrument prototype: input mapping under redesign |
+| `reference` | Pointers to external systems/resources | retrieval bugs tracked in issue tracker |
 
 ## Soft Delete Pattern
 
 Memories are never hard-deleted. `status` field:
-- `active` — normal, visible to search
-- `invalid` — marked stale, excluded from search results
+- `active`: normal, visible to search
+- `invalid`: marked stale, excluded from search results
 
 The `supersedes` field can point from new memory to the old one, creating an audit chain.
